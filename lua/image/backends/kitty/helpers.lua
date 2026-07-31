@@ -11,6 +11,31 @@ if not stdout then error("failed to open stdout") end
 
 local is_SSH = (vim.env.SSH_CLIENT ~= nil) or (vim.env.SSH_TTY ~= nil)
 
+-- Under WSL the terminal emulator is usually a Windows process, so a path we
+-- send it for transmit_medium=file is resolved against the Windows filesystem,
+-- where /tmp/... does not exist -- the transmit silently does nothing. Translate
+-- to a UNC path (\\wsl.localhost\<distro>\tmp\...) so the terminal can find it.
+local is_WSL = (vim.env.WSL_DISTRO_NAME ~= nil) or (vim.env.WSL_INTEROP ~= nil)
+
+---@type table<string, string>
+local win_path_cache = {}
+
+---@param path string
+---@return string
+local to_terminal_path = function(path)
+  if not is_WSL or vim.fn.executable("wslpath") == 0 then return path end
+  local cached = win_path_cache[path]
+  if cached then return cached end
+
+  local out = vim.fn.system({ "wslpath", "-w", path })
+  if vim.v.shell_error ~= 0 then return path end
+  out = vim.fn.trim(out)
+  if out == "" then return path end
+
+  win_path_cache[path] = out
+  return out
+end
+
 -- https://github.com/edluffy/hologram.nvim/blob/main/lua/hologram/terminal.lua#L77
 local DEFAULT_DIRECT_CHUNK_SIZE = 4096
 
@@ -123,6 +148,9 @@ local write_graphics = function(config, data, direct_chunk_size)
       if not ok then error(result) end
       if not close_ok then error(close_err) end
       data = result
+    else
+      -- transmit_medium=file: `data` is a path the terminal will open itself.
+      data = to_terminal_path(data)
     end
     data = vim.base64.encode(data):gsub("%-", "/")
     local chunks = get_chunked(data, direct_chunk_size)
