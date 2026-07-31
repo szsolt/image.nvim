@@ -6,10 +6,28 @@ local utils = require("image/utils")
 ---@type table<string, { id: number, height: number }>
 local buf_extmark_map = {}
 
+-- Memoize logical id -> kitty image id instead of incrementing per Image object.
+-- clear(shallow=false) drops state.images[id], so from_file() rebuilds the object
+-- and upstream's next_internal_id++ leaked a fresh terminal image every
+-- clear/recreate cycle (observed: 11 transmits, ids 1..21, from one cursor move),
+-- which the terminal then cycled through. Ids start at 1: large ones render black.
+local assigned_ids = {} ---@type table<string, number>
+local next_free_id = 1
+
+---@param logical_id string
+---@return number
+local get_stable_internal_id = function(logical_id)
+  local existing = assigned_ids[logical_id]
+  if existing then return existing end
+
+  local id = next_free_id
+  next_free_id = next_free_id + 1
+  assigned_ids[logical_id] = id
+  return id
+end
+
 ---@class Image
-local Image = {
-  next_internal_id = 1,
-}
+local Image = {}
 Image.__index = Image
 
 ---@param template Image
@@ -19,8 +37,7 @@ local createImage = function(template, global_state)
   local instance = template or { geometry = { x = 0, y = 0 } }
   instance.global_state = global_state
 
-  instance.internal_id = Image.next_internal_id
-  Image.next_internal_id = Image.next_internal_id + 1
+  instance.internal_id = get_stable_internal_id(tostring(instance.id))
 
   setmetatable(instance, Image)
   return instance
